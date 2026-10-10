@@ -96,3 +96,7 @@ To get moving bars without a phone, stop shairport-sync and mute the DAC (`amixe
 - Classic AirPlay (version 1) only, which is what Debian's shairport-sync package supports.
 - Text uses Inter, with DejaVu Sans as a fallback. Install a CJK font and add it as another fallback to display Chinese, Japanese or Korean titles.
 - The colour picker uses the cover's most prominent vivid colour. That isn't always the most eye-catching one.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
