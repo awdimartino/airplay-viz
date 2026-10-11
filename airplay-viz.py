@@ -7,9 +7,13 @@ bars on the right, drawn full-screen on the HDMI display via SDL/KMSDRM.
 - Track info + cover art: shairport-sync's metadata pipe.
 - Bar colour: picked from the album art for each track.
 
+Settings (bar response, sleep, ...) are adjustable live from a small web page,
+http://<host>:8090/ (see settings.py and webui.py).
+
 `kill -USR1 <pid>` saves the current frame to /tmp/airplay-viz.png.
 """
 import base64
+import collections
 import io
 import json
 import math
@@ -25,6 +29,10 @@ os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame  # noqa: E402
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter  # noqa: E402
 
+import settings  # noqa: E402
+import webui  # noqa: E402
+from settings import Setting  # noqa: E402
+
 PIPE = "/tmp/shairport-sync-metadata"
 CAVA_CONF = os.path.expanduser("~/.config/cava/airplay-viz.conf")
 SCREENSHOT = "/tmp/airplay-viz.png"
@@ -32,14 +40,35 @@ CACHE_DIR = os.path.expanduser("~/.cache/airplay-viz")
 STATE_FILE = os.path.join(CACHE_DIR, "state.json")
 ART_FILE = os.path.join(CACHE_DIR, "art")
 IDLE_NAME = os.environ.get("AIRPLAY_VIZ_NAME", "AirPlay")
-# Put the screen to sleep after this many seconds without music (0 = never)
-SCREEN_TIMEOUT = float(os.environ.get("AIRPLAY_VIZ_SCREEN_TIMEOUT", "300"))
-# How to sleep: "black" keeps the HDMI signal and shows pure black (for
-# screens whose "no signal" page is bright); "off" switches HDMI off.
-SCREEN_SLEEP = os.environ.get("AIRPLAY_VIZ_SCREEN_SLEEP", "black")
-BARS = 40
-FPS = 60
+WEB_PORT = int(os.environ.get("AIRPLAY_VIZ_PORT", "8090"))   # settings page; 0 = off
 RATE = 44100          # AirPlay RTP frames per second
+
+# Live-adjustable from the settings page (see settings.py / webui.py)
+settings.register("screen", "Visualizer", [
+    Setting("rise_ms", "Bar rise time", 0, min=0, max=500, step=5, unit="ms",
+            hint="How quickly bars jump up to a new level. 0 = instant."),
+    Setting("settle_ms", "Bar settle time", 0, min=0, max=2000, step=10, unit="ms",
+            hint="How quickly bars fall back down. Higher = slower, smoother fall. 0 = instant."),
+    Setting("smoothing", "Smoothing", 35, min=0, max=100, step=1, restart="cava",
+            hint="cava's own smoothing: low = jittery and fast, high = smooth and slow."),
+    Setting("sensitivity", "Sensitivity", 0, min=0, max=1000, step=5, unit="%", restart="cava",
+            hint="0 = automatic (loud passages fill the bar area). Any other value is a fixed "
+                 "level, e.g. 400; lower it for more headroom at the top."),
+    Setting("max_height", "Bar height", 100, min=20, max=100, step=1, unit="%",
+            hint="Tallest a bar can grow, as a share of the bar area."),
+    Setting("bars", "Number of bars", 40, min=8, max=80, step=1, restart="cava",
+            hint="How many bars to draw."),
+    Setting("fps", "Frame rate", 60, min=20, max=60, step=1, unit="fps", restart="cava",
+            hint="Bar updates per second. Lower uses less CPU."),
+    Setting("delay_ms", "Bar delay", 0, min=0, max=1000, step=10, unit="ms",
+            hint="Hold the bars back to line up with what you hear (e.g. if shairport's "
+                 "output buffer is raised)."),
+    Setting("sleep_min", "Sleep after", 5, min=0, max=240, step=1, unit="min",
+            hint="Minutes without music before the screen sleeps. 0 = never."),
+    Setting("sleep_mode", "Sleep mode", "black", choices=["black", "off"],
+            hint="black keeps the HDMI signal and shows pure black (for screens with a bright "
+                 "no-signal page); off switches the HDMI output off."),
+])
 FADE = 0.6            # seconds for track-change crossfade
 
 FONT_DIR = "/usr/share/fonts/opentype/inter/"
@@ -65,7 +94,8 @@ meta = {
     "pos0": 0.0, "t0": 0.0, "total": 0.0,
     "changed": 0.0,   # time of last title/art change (debounced rebuild)
 }
-bars_latest = [0] * BARS
+bars_latest = [0] * 40
+shutting_down = threading.Event()
 
 
 def position(m):
@@ -196,12 +226,15 @@ def restore_state():
 
 
 def write_cava_conf():
+    s = settings.values("screen")
+    sens = s["sensitivity"]
     os.makedirs(os.path.dirname(CAVA_CONF), exist_ok=True)
     with open(CAVA_CONF, "w") as f:
         f.write(f"""[general]
-framerate = {FPS}
-autosens = 1
-bars = {BARS}
+framerate = {s["fps"]}
+autosens = {0 if sens else 1}
+{f"sensitivity = {sens}" if sens else ""}
+bars = {s["bars"]}
 
 [input]
 method = alsa
@@ -218,20 +251,53 @@ channels = mono
 mono_option = average
 
 [smoothing]
-noise_reduction = 35
+noise_reduction = {s["smoothing"]}
 """)
 
 
-def cava_reader(proc):
-    global bars_latest
-    for line in proc.stdout:
-        try:
-            vals = [int(v) for v in line.split(b";") if v.strip()]
-        except ValueError:
-            continue
-        if len(vals) >= BARS:
-            bars_latest = vals[:BARS]
-    os._exit(1)   # cava died: let systemd restart us
+class Cava:
+    """cava subprocess in raw mode; restartable when its settings change."""
+
+    def __init__(self):
+        self.proc = None
+        self._lock = threading.Lock()
+
+    def start(self):
+        with self._lock:
+            self._spawn()
+
+    def restart(self):
+        with self._lock:
+            old, self.proc = self.proc, None   # reader of `old` must not exit us
+            if old:
+                old.terminate()
+                try:
+                    old.wait(3)   # the loopback only allows one reader at a time
+                except subprocess.TimeoutExpired:
+                    old.kill()
+            self._spawn()
+
+    def stop(self):
+        with self._lock:
+            if self.proc:
+                self.proc.terminate()
+
+    def _spawn(self):
+        write_cava_conf()
+        self.proc = subprocess.Popen(["cava", "-p", CAVA_CONF], stdout=subprocess.PIPE)
+        threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
+
+    def _read(self, proc):
+        global bars_latest
+        for line in proc.stdout:
+            try:
+                vals = [int(v) for v in line.split(b";") if v.strip()]
+            except ValueError:
+                continue
+            if vals:
+                bars_latest = vals
+        if proc is self.proc and not shutting_down.is_set():
+            os._exit(1)   # cava died unexpectedly: let systemd restart us
 
 
 # --------------------------------------------------------------------------
@@ -540,7 +606,7 @@ class Viz:
         span = self.bars_x1 - self.bars_x0
         pitch = span / n
         bw = max(2, int(pitch * 0.68))
-        height = self.bars_bottom - self.bars_top
+        height = (self.bars_bottom - self.bars_top) * settings.get("screen", "max_height") / 100
         low, high = mix((0, 0, 0), accent, 0.75), mix(accent, (255, 255, 255), 0.35)
         for i, v in enumerate(bars):
             h = max(4, int(height * min(v, 1000) / 1000))
@@ -570,6 +636,28 @@ class Viz:
         if right:
             rs = self.render(self.f_time, right, (150, 150, 160))
             self.screen.blit(rs, (x0 + w - rs.get_width(), y + 10))
+
+
+class BarEasing:
+    """On-screen rise/settle easing, on top of cava's own smoothing."""
+
+    def __init__(self):
+        self.shown = []
+        self.last = time.monotonic()
+
+    def step(self, target, rise_ms, settle_ms):
+        now = time.monotonic()
+        dt, self.last = now - self.last, now
+        if len(self.shown) != len(target):   # bar count changed
+            self.shown = [float(v) for v in target]
+            return self.shown
+
+        def k(ms):   # fraction of the way to go this frame; ~95% done after `ms`
+            return 1.0 if ms <= 0 else 1 - math.exp(-dt * 3000 / ms)
+        kr, ks = k(rise_ms), k(settle_ms)
+        self.shown = [s + (t - s) * (kr if t > s else ks)
+                      for s, t in zip(self.shown, target)]
+        return self.shown
 
 
 def open_display():
@@ -602,18 +690,29 @@ def console_blank(blank):
         print(f"console blank failed: {e}", flush=True)
 
 
+CAVA_KEYS = {"smoothing", "sensitivity", "bars", "fps"}   # need a cava restart
+
+
 def main():
-    write_cava_conf()
-    cava = subprocess.Popen(["cava", "-p", CAVA_CONF], stdout=subprocess.PIPE)
-    threading.Thread(target=cava_reader, args=(cava,), daemon=True).start()
+    cava = Cava()
+    cava.start()
+    settings.on_change(lambda sec, keys: cava.restart()
+                       if sec == "screen" and CAVA_KEYS & set(keys) else None)
     threading.Thread(target=metadata_reader, daemon=True).start()
+    if WEB_PORT:
+        try:
+            webui.start(WEB_PORT)
+        except OSError as e:   # port taken: keep the display running anyway
+            print(f"settings page disabled: {e}", flush=True)
 
     pygame.font.init()
     screen, viz = open_display()
     restore_state()
     last_save = time.monotonic()
     last_playing = time.monotonic()
-    asleep = False
+    asleep = None          # sleep mode in use while asleep ("black"/"off")
+    easing = BarEasing()
+    history = collections.deque()   # (time, bars) for the bar delay
 
     flags = {"shot": False, "run": True}
     signal.signal(signal.SIGUSR1, lambda *_: flags.__setitem__("shot", True))
@@ -623,6 +722,7 @@ def main():
     try:
         while flags["run"]:
             now = time.monotonic()
+            s = settings.values("screen")
             with lock:
                 m = dict(meta)
             if m["active"] and not m["paused"]:
@@ -630,27 +730,27 @@ def main():
 
             if asleep:
                 if now - last_playing > 1:   # still nothing playing
-                    if flags["shot"] and SCREEN_SLEEP != "off":
+                    if flags["shot"] and asleep != "off":
                         flags["shot"] = False
                         pygame.image.save(screen, SCREENSHOT)
                     time.sleep(0.25)
                     continue
-                if SCREEN_SLEEP == "off":       # music is back: wake up
+                if asleep == "off":             # music is back: wake up
                     console_blank(False)
                     screen, viz = open_display()
                 else:                           # fade in from the black frame
                     viz.prev_layer = pygame.Surface(screen.get_size()).convert()
                     viz.fade_t0 = now
-                asleep = False
-            elif SCREEN_TIMEOUT and now - last_playing > SCREEN_TIMEOUT:
+                asleep = None
+            elif s["sleep_min"] and now - last_playing > s["sleep_min"] * 60:
                 fade_out(screen)
-                if SCREEN_SLEEP == "off":
+                asleep = s["sleep_mode"]
+                if asleep == "off":
                     pygame.display.quit()   # hand the display to the console...
                     console_blank(True)     # ...which switches HDMI off
                 else:
                     screen.fill((0, 0, 0))  # keep the signal, show pure black
                     pygame.display.flip()
-                asleep = True
                 continue
 
             for e in pygame.event.get():
@@ -662,14 +762,24 @@ def main():
             elif m["active"] and now - last_save > 5:
                 save_state(m, with_art=False)
                 last_save = now
-            viz.draw(m, bars_latest, now)
+            bars = bars_latest
+            if s["delay_ms"]:
+                history.append((now, bars))
+                while len(history) > 1 and history[1][0] <= now - s["delay_ms"] / 1000:
+                    history.popleft()
+                bars = history[0][1]
+            else:
+                history.clear()
+            bars = easing.step(bars, s["rise_ms"], s["settle_ms"])
+            viz.draw(m, bars, now)
             pygame.display.flip()
             if flags["shot"]:
                 flags["shot"] = False
                 pygame.image.save(screen, SCREENSHOT)
-            clock.tick(FPS)
+            clock.tick(s["fps"])
     finally:
-        cava.terminate()
+        shutting_down.set()
+        cava.stop()
         pygame.quit()
 
 

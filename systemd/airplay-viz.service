@@ -11,6 +11,8 @@ SupplementaryGroups=video render input
 Environment=SDL_VIDEODRIVER=kmsdrm PYGAME_HIDE_SUPPORT_PROMPT=1
 # Name shown on the idle screen (match shairport-sync's general.name)
 Environment="AIRPLAY_VIZ_NAME=Alex Pi"
+# Settings page port (http://<host>:8090/); 0 disables it
+#Environment=AIRPLAY_VIZ_PORT=8090
 TTYPath=/dev/tty1
 TTYReset=yes
 TTYVHangup=yes
@@ -21,6 +23,8 @@ ExecStartPre=+/bin/sh -c "chvt 1; setterm --blank 0 --powerdown 0 --cursor off >
 ExecStart=/usr/bin/python3 -u /home/argyle/airplay-viz/airplay-viz.py
 Restart=always
 RestartSec=3
+# stop signal to python only, so it can shut cava down itself
+KillMode=mixed
 
 [Install]
 WantedBy=multi-user.target

@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visualizer Settings</title>
+<style>
+  :root {
+    --bg: #111114; --panel: #1b1b20; --line: #2c2c34; --text: #ececf1;
+    --muted: #9a9aa6; --accent: #ff9f2e; --dirty: #3a2f17; --error: #ff6b6b; --ok: #6bd68a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 16px 16px 96px; }
+  h1 { font-size: 20px; margin: 4px 0 16px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+            padding: 14px 16px; margin-bottom: 16px; }
+  h2 { font-size: 16px; margin: 0 0 10px; }
+  .presets { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+             padding-bottom: 12px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .presets select { flex: 1 1 160px; }
+  .row { display: grid; grid-template-columns: 1fr 120px; gap: 4px 12px;
+         padding: 10px 0; border-bottom: 1px solid var(--line); align-items: center; }
+  .row:last-child { border-bottom: 0; }
+  .row label { font-weight: 600; }
+  .row .hint { grid-column: 1 / -1; color: var(--muted); font-size: 13px; }
+  .row.dirty { background: var(--dirty); margin: 0 -16px; padding: 10px 16px; }
+  .field { display: flex; align-items: center; gap: 6px; }
+  .field .unit { color: var(--muted); font-size: 13px; min-width: 2.2em; }
+  input, select, button { font: inherit; color: var(--text); background: #26262d;
+         border: 1px solid #3a3a44; border-radius: 6px; padding: 6px 8px; }
+  input[type=number] { width: 100%; text-align: right; }
+  button { cursor: pointer; }
+  button:hover { border-color: #5a5a66; }
+  button.primary { background: var(--accent); color: #1a1205; border-color: var(--accent);
+                   font-weight: 700; padding: 10px 22px; }
+  button.link { background: none; border: 0; color: var(--muted); text-decoration: underline; padding: 6px 0; }
+  .bar { position: fixed; left: 0; right: 0; bottom: 0; background: #0c0c0fee;
+         border-top: 1px solid var(--line); padding: 10px 16px; }
+  .bar-inner { max-width: 760px; margin: 0 auto; display: flex; gap: 12px; align-items: center; }
+  #status { color: var(--muted); font-size: 14px; flex: 1; }
+  #status.ok { color: var(--ok); } #status.err { color: var(--error); }
+  .restart { color: var(--muted); font-size: 12px; margin-left: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Visualizer settings</h1>
+  <div id="sections">Loading…</div>
+</main>
+<div class="bar"><div class="bar-inner">
+  <span id="status"></span>
+  <button class="primary" id="push">Push changes</button>
+</div></div>
+
+<script>
+let state = null;
+const $ = (sel, el = document) => el.querySelector(sel);
+
+function setStatus(text, kind = "") {
+  const s = $("#status"); s.textContent = text; s.className = kind;
+}
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} :
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function render() {
+  const root = $("#sections");
+  root.innerHTML = "";
+  for (const sec of state.sections) {
+    const el = document.createElement("section");
+    el.dataset.section = sec.id;
+    el.innerHTML = `<h2></h2>
+      <div class="presets">
+        <select aria-label="Preset"><option value="">Presets…</option></select>
+        <button data-act="load">Load</button>
+        <button data-act="save">Save as…</button>
+        <button data-act="delete">Delete</button>
+        <button class="link" data-act="reset">Reset to defaults</button>
+      </div>`;
+    $("h2", el).textContent = sec.title;
+    const sel = $("select", el);
+    for (const name of sec.presets) sel.add(new Option(name, name));
+
+    for (const s of sec.settings) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML = `<label></label><div class="field"></div><div class="hint"></div>`;
+      const id = `${sec.id}-${s.key}`;
+      $("label", row).textContent = s.label;
+      $("label", row).htmlFor = id;
+      if (s.restart) {
+        const r = document.createElement("span");
+        r.className = "restart"; r.textContent = `(restarts ${s.restart})`;
+        $("label", row).append(r);
+      }
+      $(".hint", row).textContent = s.hint + (s.choices ? "" : `  Default ${s.default}${s.unit ? " " + s.unit : ""}.`);
+      let input;
+      if (s.choices) {
+        input = document.createElement("select");
+        for (const c of s.choices) input.add(new Option(c, c));
+      } else {
+        input = document.createElement("input");
+        input.type = "number";
+        if (s.min !== null) input.min = s.min;
+        if (s.max !== null) input.max = s.max;
+        input.step = s.step ?? "any";
+      }
+      input.id = id;
+      input.dataset.key = s.key;
+      input.value = s.value;
+      input.dataset.saved = String(s.value);
+      input.addEventListener("input", () => {
+        row.classList.toggle("dirty", input.value !== input.dataset.saved);
+        setStatus(document.querySelector(".dirty") ? "Unsaved changes" : "");
+      });
+      const unit = document.createElement("span");
+      unit.className = "unit"; unit.textContent = s.unit;
+      $(".field", row).append(input, unit);
+      el.append(row);
+    }
+    el.addEventListener("click", e => presetAction(e, sec.id, sel));
+    root.append(el);
+  }
+}
+
+async function presetAction(e, section, sel) {
+  const act = e.target.dataset?.act;
+  if (!act) return;
+  try {
+    let data;
+    if (act === "reset") {
+      if (!confirm("Reset this section to its defaults?")) return;
+      data = await api("/api/reset", { section });
+    } else if (act === "save") {
+      const name = prompt("Preset name:", sel.value || "");
+      if (!name) return;
+      data = await api("/api/presets/save", { section, name });
+    } else {
+      if (!sel.value) return setStatus("Pick a preset first", "err");
+      if (act === "delete" && !confirm(`Delete preset “${sel.value}”?`)) return;
+      data = await api(`/api/presets/${act}`, { section, name: sel.value });
+    }
+    state = data.state; render(); setStatus(data.message, "ok");
+  } catch (err) { setStatus(err.message, "err"); }
+}
+
+$("#push").addEventListener("click", async () => {
+  const messages = [];
+  try {
+    for (const el of document.querySelectorAll("section[data-section]")) {
+      const values = {};
+      for (const input of el.querySelectorAll("[data-key]"))
+        if (input.value !== input.dataset.saved) values[input.dataset.key] = input.value;
+      if (!Object.keys(values).length) continue;
+      const data = await api("/api/settings", { section: el.dataset.section, values });
+      state = data.state; messages.push(data.message);
+    }
+    render();
+    setStatus(messages.length ? messages.join(" · ") : "Nothing to push", "ok");
+  } catch (err) { setStatus(err.message, "err"); }
+});
+
+api("/api/state").then(s => { state = s; render(); })
+  .catch(err => setStatus("Could not load settings: " + err.message, "err"));
+</script>
+</body>
+</html>
