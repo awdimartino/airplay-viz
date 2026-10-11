@@ -32,6 +32,8 @@ CACHE_DIR = os.path.expanduser("~/.cache/airplay-viz")
 STATE_FILE = os.path.join(CACHE_DIR, "state.json")
 ART_FILE = os.path.join(CACHE_DIR, "art")
 IDLE_NAME = os.environ.get("AIRPLAY_VIZ_NAME", "AirPlay")
+# Turn the screen off after this many seconds without music (0 = never)
+SCREEN_TIMEOUT = float(os.environ.get("AIRPLAY_VIZ_SCREEN_TIMEOUT", "300"))
 BARS = 40
 FPS = 60
 RATE = 44100          # AirPlay RTP frames per second
@@ -567,19 +569,48 @@ class Viz:
             self.screen.blit(rs, (x0 + w - rs.get_width(), y + 10))
 
 
+def open_display():
+    pygame.display.init()
+    screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+    pygame.mouse.set_visible(False)
+    return screen, Viz(screen)
+
+
+def fade_out(screen, seconds=2.0):
+    frame = screen.copy()
+    black = pygame.Surface(screen.get_size())
+    t0 = time.monotonic()
+    while (t := time.monotonic() - t0) < seconds:
+        screen.blit(frame, (0, 0))
+        black.set_alpha(int(255 * t / seconds))
+        screen.blit(black, (0, 0))
+        pygame.display.flip()
+        time.sleep(1 / 30)
+
+
+def console_blank(blank):
+    """Blank/unblank the Linux console on our tty (tty1). With KMS this
+    switches the HDMI output off (DPMS), not just to black."""
+    try:
+        with open("/dev/tty1", "w") as tty:
+            subprocess.run(["setterm", "--blank", "force" if blank else "poke"],
+                           stdin=tty, stdout=tty, timeout=5)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"console blank failed: {e}", flush=True)
+
+
 def main():
     write_cava_conf()
     cava = subprocess.Popen(["cava", "-p", CAVA_CONF], stdout=subprocess.PIPE)
     threading.Thread(target=cava_reader, args=(cava,), daemon=True).start()
     threading.Thread(target=metadata_reader, daemon=True).start()
 
-    pygame.display.init()
     pygame.font.init()
-    screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
-    pygame.mouse.set_visible(False)
-    viz = Viz(screen)
+    screen, viz = open_display()
     restore_state()
     last_save = time.monotonic()
+    last_playing = time.monotonic()
+    asleep = False
 
     flags = {"shot": False, "run": True}
     signal.signal(signal.SIGUSR1, lambda *_: flags.__setitem__("shot", True))
@@ -588,12 +619,29 @@ def main():
     clock = pygame.time.Clock()
     try:
         while flags["run"]:
-            for e in pygame.event.get():
-                if e.type == pygame.QUIT:
-                    flags["run"] = False
             now = time.monotonic()
             with lock:
                 m = dict(meta)
+            if m["active"] and not m["paused"]:
+                last_playing = now
+
+            if asleep:
+                if now - last_playing > 1:   # still nothing playing
+                    time.sleep(0.25)
+                    continue
+                console_blank(False)            # music is back: wake up
+                screen, viz = open_display()
+                asleep = False
+            elif SCREEN_TIMEOUT and now - last_playing > SCREEN_TIMEOUT:
+                fade_out(screen)
+                pygame.display.quit()   # hand the display back to the console...
+                console_blank(True)     # ...which switches the HDMI signal off
+                asleep = True
+                continue
+
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT:
+                    flags["run"] = False
             if viz.maybe_rebuild(m, now):
                 save_state(m)
                 last_save = now
