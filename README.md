@@ -156,6 +156,37 @@ Values and presets are stored in `~/.config/airplay-viz/settings.json` and `pres
 
 The page has no login. It's meant for a home network only, so don't expose port 8091 to the internet.
 
+### Optional: a friendly name through Traefik
+
+If you run Traefik in Docker on the same machine, it can serve the page as, say, `http://viz.pi/`. The visualizer runs on the host rather than in a container, so Traefik needs its file provider with a route pointing at the host:
+
+1. Create `traefik-dynamic/viz.yml` next to your `docker-compose.yml`:
+   ```yaml
+   http:
+     routers:
+       viz:
+         rule: Host(`viz.pi`)
+         entryPoints: [web]
+         service: viz
+     services:
+       viz:
+         loadBalancer:
+           servers:
+             - url: http://172.20.0.1:8091   # (edit) the gateway of Traefik's Docker network
+   ```
+   Find the gateway with `docker network inspect <network> --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`. Check that Traefik can reach the page: `docker exec <traefik container> wget -qO- http://<gateway>:8091/api/state`.
+2. In the Traefik service in `docker-compose.yml`, add to `command:`
+   ```yaml
+         - "--providers.file.directory=/etc/traefik/dynamic"
+         - "--providers.file.watch=true"
+   ```
+   and to `volumes:`
+   ```yaml
+         - ./traefik-dynamic:/etc/traefik/dynamic:ro
+   ```
+3. `docker compose up -d traefik`. This briefly restarts Traefik, so your other Traefik-routed sites are down for a few seconds.
+4. The name also has to resolve to the machine, using whatever already handles your other names. The tested setup uses a dnsmasq wildcard (`address=/pi/<pi's IP>`) that Tailscale split DNS forwards `.pi` lookups to, so `viz.pi` needed no DNS change.
+
 ## Moving to a new machine
 
 1. Follow the setup steps above. The **(edit)** values are the only machine-specific ones: user, paths, speaker name, DAC card id and mixer, and WirePlumber device names.
