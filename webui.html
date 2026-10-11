@@ -19,18 +19,20 @@
   h2 { font-size: 16px; margin: 0 0 10px; }
   .presets { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
              padding-bottom: 12px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
-  .presets select { flex: 1 1 160px; }
-  .row { display: grid; grid-template-columns: 1fr 120px; gap: 4px 12px;
+  .presets select { flex: 1 1 140px; min-width: 0; }
+  .row { display: grid; grid-template-columns: minmax(0, 1fr) 130px; gap: 4px 12px;
          padding: 10px 0; border-bottom: 1px solid var(--line); align-items: center; }
   .row:last-child { border-bottom: 0; }
   .row label { font-weight: 600; }
   .row .hint { grid-column: 1 / -1; color: var(--muted); font-size: 13px; }
   .row.dirty { background: var(--dirty); margin: 0 -16px; padding: 10px 16px; }
-  .field { display: flex; align-items: center; gap: 6px; }
+  .field { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .field input, .field select { flex: 1; min-width: 0; }
   .field .unit { color: var(--muted); font-size: 13px; min-width: 2.2em; }
   input, select, button { font: inherit; color: var(--text); background: #26262d;
          border: 1px solid #3a3a44; border-radius: 6px; padding: 6px 8px; }
-  input[type=number] { width: 100%; text-align: right; }
+  input[type=number] { width: 100%; min-width: 0; text-align: right; }
+  .hint, label { overflow-wrap: anywhere; }
   button { cursor: pointer; }
   button:hover { border-color: #5a5a66; }
   button.primary { background: var(--accent); color: #1a1205; border-color: var(--accent);
