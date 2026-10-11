@@ -21,8 +21,10 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 KEY = bytes.fromhex("34522A5B7A6E492C08090A9D8D2A23F8")
 CHAR = "0000ac52-1212-efde-1523-785fedbeda25"
 RATE = 20             # updates per second while playing
-GATE = 0.15           # bass level (0-1) below which the lamp is dark
-CURVE = 1.8           # >1 = more contrast between quiet and loud
+GATE = 0.2            # fraction of the song's recent peak below which the lamp is dark
+CURVE = 1.5           # >1 = more contrast between quiet and loud
+SILENCE = 0.03        # absolute energy (0-1) treated as silence
+PEAK_DECAY = 0.995    # per update; recent-peak memory of roughly 7 s at 20 Hz
 
 
 def packet(r, g, b, brightness):
@@ -45,8 +47,12 @@ class Lamp:
 
     def update(self, active, color, bars):
         """Called every frame from the render loop."""
-        n = max(1, len(bars) // 8)            # lowest ~1/8 of the bars = bass
-        bass = min(1.0, sum(bars[:n]) / n / 1000)
+        # energy from bass (lowest 1/8 of bars) and low-mids (up to half), so
+        # songs without a big kick still drive the lamp
+        n, h = max(1, len(bars) // 8), max(2, len(bars) // 2)
+        bass = sum(bars[:n]) / n / 1000
+        lowmid = sum(bars[n:h]) / (h - n) / 1000
+        bass = min(1.0, 0.5 * bass + 0.5 * lowmid)
         with self._lock:
             self._active, self._color, self._bass = active, tuple(color), bass
             if active:
@@ -100,12 +106,16 @@ class Lamp:
                 await asyncio.sleep(5)
 
     async def _drive(self, client):
-        level, last, last_sent = 0.0, None, 0.0
+        level, last, last_sent, peak = 0.0, None, 0.0, 0.2
         while client.is_connected:
             now = time.monotonic()
             active, color, bass, last_active = self._snapshot()
             if active:
-                target = (max(0.0, bass - GATE) / (1 - GATE)) ** CURVE
+                # scale to this song's recent peak so quieter mixes still use the
+                # full range; true silence stays dark
+                peak = max(bass, peak * PEAK_DECAY, 0.15)
+                rel = bass / peak if bass > SILENCE else 0.0
+                target = (max(0.0, rel - GATE) / (1 - GATE)) ** CURVE
                 # fast attack, smoother decay
                 level = target if target > level else level * 0.8 + target * 0.2
                 bright = round(level * 100)
