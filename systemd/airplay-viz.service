@@ -15,6 +15,9 @@ Environment="AIRPLAY_VIZ_NAME=Alex Pi"
 # AIRPLAY_VIZ_LAMP_IDLE: "dim" (stay on in album colour) or "off" after playback.
 # AIRPLAY_VIZ_LAMP_RELEASE: seconds after playback to disconnect (0 = stay connected).
 Environment=AIRPLAY_VIZ_LAMP=B7:C2:85:5D:70:54 AIRPLAY_VIZ_LAMP_IDLE=off
+# Hold the screen bars back to match the audio (see shairport's
+# audio_backend_buffer_desired_length_in_seconds); the lamp gets the lead.
+Environment=AIRPLAY_VIZ_SCREEN_DELAY=0.15
 TTYPath=/dev/tty1
 TTYReset=yes
 TTYVHangup=yes

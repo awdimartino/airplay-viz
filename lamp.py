@@ -23,10 +23,13 @@ KEY = bytes.fromhex("34522A5B7A6E492C08090A9D8D2A23F8")
 CHAR = "0000ac52-1212-efde-1523-785fedbeda25"
 RATE = 20             # updates per second while playing
 GATE = 0.2            # fraction of the song's recent peak below which the lamp sits at FLOOR
-CURVE = 1.5           # >1 = more contrast between quiet and loud
+CURVE = 1.2           # >1 = more contrast between quiet and loud
 FLOOR = 0.10          # brightness while music plays (0-1); silence is off
-SILENCE = 0.03        # absolute energy (0-1) treated as silence
+SILENCE = 0.005       # mean level across ALL bars (0-1) below which it is silence
 PEAK_DECAY = 0.995    # per update; recent-peak memory of roughly 7 s at 20 Hz
+ATTACK = 0.6          # per update, fraction of the way to a brighter target (~80 ms)
+RELEASE = 0.12        # per update, fraction of the way to a dimmer target (~400 ms)
+SILENCE_HOLD = 1.5    # seconds of silence before the floor fades out
 
 
 GAMMA = (1.5, 2.4, 2.4)   # per R,G,B: LED channels are linear; screens are not
@@ -68,6 +71,7 @@ class Lamp:
         self._active = False
         self._color = (255, 255, 255)
         self._bass = 0.0
+        self._sound = 0.0
         self._last_active = 0.0
 
     def update(self, active, color, bars):
@@ -78,8 +82,12 @@ class Lamp:
         bass = sum(bars[:n]) / n / 1000
         lowmid = sum(bars[n:h]) / (h - n) / 1000
         bass = min(1.0, 0.5 * bass + 0.5 * lowmid)
+        # silence is judged on every frequency, so quiet or bass-light
+        # passages still count as music
+        sound = sum(bars) / max(1, len(bars)) / 1000
         with self._lock:
             self._active, self._color, self._bass = active, lamp_color(color), bass
+            self._sound = sound
             if active:
                 self._last_active = time.monotonic()
 
@@ -106,10 +114,10 @@ class Lamp:
 
     def _snapshot(self):
         with self._lock:
-            return self._active, self._color, self._bass, self._last_active
+            return self._active, self._color, self._bass, self._sound, self._last_active
 
     def _wanted(self):
-        active, _, _, last = self._snapshot()
+        active, *_, last = self._snapshot()
         return not self.release or active or time.monotonic() - last < self.release
 
     async def _run(self):
@@ -132,21 +140,25 @@ class Lamp:
 
     async def _drive(self, client):
         level, last, last_sent, peak = 0.0, None, 0.0, 0.2
+        floor, last_sound = 0.0, 0.0
         while client.is_connected:
             now = time.monotonic()
-            active, color, bass, last_active = self._snapshot()
+            active, color, bass, sound, last_active = self._snapshot()
             if active:
                 # scale to this song's recent peak so quieter mixes still use the
                 # full range; true silence stays dark
                 peak = max(bass, peak * PEAK_DECAY, 0.15)
-                rel = bass / peak if bass > SILENCE else 0.0
+                if sound > SILENCE:
+                    last_sound = now
+                rel = bass / peak
                 target = (max(0.0, rel - GATE) / (1 - GATE)) ** CURVE
-                # fast attack, smoother decay
-                level = target if target > level else level * 0.8 + target * 0.2
-                if bass > SILENCE:
-                    bright = round((FLOOR + (1 - FLOOR) * level) * 100)
-                else:
-                    bright = round(level * 100)    # fade out into silence
+                # ease towards the target: quick rise, slower fall, no hard jumps
+                level += (target - level) * (ATTACK if target > level else RELEASE)
+                # the floor only fades out after sustained silence, so quiet
+                # passages don't flicker between off and on
+                want_floor = FLOOR if now - last_sound < SILENCE_HOLD else 0.0
+                floor += (want_floor - floor) * RELEASE
+                bright = round((floor + (1 - floor) * level) * 100)
                 state = (*color, bright) if bright >= 2 else (0, 0, 0, 0)
             else:
                 state = (*color, 30) if self.idle == "dim" else (0, 0, 0, 0)

@@ -10,6 +10,7 @@ bars on the right, drawn full-screen on the HDMI display via SDL/KMSDRM.
 `kill -USR1 <pid>` saves the current frame to /tmp/airplay-viz.png.
 """
 import base64
+import collections
 import colorsys
 import io
 import json
@@ -35,6 +36,11 @@ IDLE_NAME = os.environ.get("AIRPLAY_VIZ_NAME", "AirPlay")
 LAMP_ADDRESS = os.environ.get("AIRPLAY_VIZ_LAMP", "")          # iStrip+ lamp MAC; empty = off
 LAMP_IDLE = os.environ.get("AIRPLAY_VIZ_LAMP_IDLE", "off")     # "off" or "dim" when nothing is playing
 LAMP_RELEASE = float(os.environ.get("AIRPLAY_VIZ_LAMP_RELEASE", "0"))  # 0 = stay connected
+# Seconds to hold back the on-screen bars. With a larger shairport output
+# buffer the analysed audio arrives early; delaying only the screen keeps it in
+# sync with what you hear while the lamp (which lags over Bluetooth) gets the
+# head start.
+SCREEN_DELAY = float(os.environ.get("AIRPLAY_VIZ_SCREEN_DELAY", "0"))
 BARS = 40
 FPS = 60
 RATE = 44100          # AirPlay RTP frames per second
@@ -503,6 +509,7 @@ def main():
     viz = Viz(screen)
     restore_state()
     last_save = time.monotonic()
+    history = collections.deque()   # (time, bars) for SCREEN_DELAY
 
     lamp = None
     if LAMP_ADDRESS:
@@ -532,7 +539,13 @@ def main():
             elif m["active"] and now - last_save > 5:
                 save_state(m, with_art=False)
                 last_save = now
-            viz.draw(m, bars_latest, now)
+            screen_bars = bars_latest
+            if SCREEN_DELAY > 0:
+                history.append((now, bars_latest))
+                while len(history) > 1 and history[1][0] <= now - SCREEN_DELAY:
+                    history.popleft()
+                screen_bars = history[0][1]
+            viz.draw(m, screen_bars, now)
             if lamp:
                 lamp.update(m["active"], viz.current_accent(now), bars_latest)
             pygame.display.flip()
