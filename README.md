@@ -205,19 +205,34 @@ To get moving bars without a phone, stop shairport-sync and mute the DAC (`amixe
 
 This branch can also drive an iStrip+ Bluetooth LE lamp, such as the "SSL-xxxxxx" sunset lamps. The lamp takes the album's colour and its brightness pulses with the bass. It goes dark between beats and when nothing is playing. The code is in `lamp.py`. It uses the protocol reverse-engineered in [this Habr article](https://habr.com/en/articles/722412): AES-128-ECB packets written to characteristic `ac52`.
 
-```sh
-sudo apt install python3-bleak python3-cryptography
-```
+### Lamp setup
 
-Settings in the service file:
+1. Install the extra packages and copy `lamp.py` next to the other files:
+   ```sh
+   sudo apt install python3-bleak python3-cryptography
+   cp lamp.py ~/airplay-viz/
+   ```
+2. Find the lamp's MAC address. With the lamp on and the iStrip+ app closed (the lamp takes only one connection), run `bluetoothctl --timeout 15 scan on` and look for a device named `SSL-…`.
+3. In the service file, set `AIRPLAY_VIZ_LAMP=<MAC>`. Optionally set `AIRPLAY_VIZ_LAMP_RELEASE` to the seconds after playback ends before disconnecting, so the iStrip+ app can use the lamp in between. `0`, the default, keeps it connected permanently. The service file on this branch also drops stale Bluetooth links when it starts and stops (`btmgmt`); keep those lines.
+4. Optional, for a head start over the Bluetooth lag: in the shairport config, set `audio_backend_buffer_desired_length_in_seconds = 0.35`. Then set **Bar delay** on the settings page to 150 ms so the screen stays in sync. The lamp, which isn't delayed, gets about 150 ms of lead.
+5. `sudo systemctl daemon-reload && sudo systemctl restart airplay-viz`. The log should show `lamp: connected`.
 
-| Variable | Meaning |
+### Lamp settings
+
+The settings page gets a **Lamp** section with its own presets:
+
+| Setting | What it does |
 |---|---|
-| `AIRPLAY_VIZ_LAMP` | The lamp's Bluetooth MAC address. Leave it unset to disable the lamp. |
-| `AIRPLAY_VIZ_LAMP_IDLE` | What the lamp does when nothing is playing: `off` (the default) turns it off, `dim` stays on at 30% in the album colour |
-| `AIRPLAY_VIZ_LAMP_RELEASE` | Seconds after playback ends before disconnecting, so the iStrip+ app can use the lamp. `0` keeps it connected permanently. |
+| Rise time / Settle time | How quickly it brightens on a beat, and how quickly it dims again |
+| Floor / Ceiling brightness | Brightness between beats while music plays, and on the strongest beats. Silence is always off. |
+| Beat threshold | How loud, relative to the song's recent peaks, music must be to rise above the floor |
+| Punch | Contrast between soft and loud beats (1 = linear) |
+| Adapt time | How quickly it rescales to a quieter song or passage |
+| Silence hold | How long a silence must last before the lamp turns off |
+| When idle / Idle dim level | Nothing playing: off, or dim in the last album colour |
+| Colour saturation, R/G/B gamma, R/G/B gain | Colour correction so the LEDs match the screen (cheap LEDs wash colours out towards white/pink). The defaults are tuned by eye for one lamp. |
 
-The lamp accepts only one Bluetooth connection at a time. It also needs a decent signal (about −80 dBm or stronger). Weaker than that, connections drop during setup.
+The lamp needs a decent Bluetooth signal, about −80 dBm or stronger. Weaker than that, connections drop during setup.
 
 ## License
 
