@@ -30,8 +30,17 @@ KEY = bytes.fromhex("34522A5B7A6E492C08090A9D8D2A23F8")
 CHAR = "0000ac52-1212-efde-1523-785fedbeda25"
 RATE = 20             # updates per second while playing (BLE interval ~49 ms)
 SILENCE = 0.005       # mean level across ALL bars (0-1) below which it is silence
+HIT_AVERAGE_S = 0.25  # "recent average" a hit must jump above (time constant)
 
 settings.register("lamp", "Lamp", [
+    Setting("mode", "React to", "level", choices=["level", "hits"],
+            hint="level: how loud the frequency range is. hits: sudden jumps in it, e.g. kick "
+                 "drums, ignoring held notes at the same frequencies."),
+    Setting("low_hz", "Lowest frequency", 50, min=20, max=16000, step=5, unit="Hz",
+            hint="Bottom of the frequency range the lamp listens to. For kick drums, about 40."),
+    Setting("high_hz", "Highest frequency", 700, min=30, max=20000, step=5, unit="Hz",
+            hint="Top of the range. For kick drums, about 120. Bass lines reach ~250 Hz, "
+                 "snares and vocals go higher."),
     Setting("rise_ms", "Rise time", 160, min=0, max=2000, step=10, unit="ms",
             hint="How quickly it brightens on a beat. 0 = instant."),
     Setting("settle_ms", "Settle time", 1150, min=0, max=5000, step=10, unit="ms",
@@ -106,26 +115,51 @@ class Lamp:
         self._lock = threading.Lock()
         self._active = False
         self._color = (255, 255, 255)
-        self._bass = 0.0
+        self._energy = 0.0        # held peak since the lamp loop last read it
         self._sound = 0.0
         self._last_active = 0.0
+        self._avg = 0.0           # recent average of the band, for hits
+        self._prev = time.monotonic()
+
+    @staticmethod
+    def _band(n, lo_hz, hi_hz):
+        """Indices of the cava bars whose frequency band overlaps lo..hi Hz."""
+        edges = settings.bar_edges()
+        if len(edges) != n + 1:   # bar count changed and cava not restarted yet
+            low, high = settings.bar_range()
+            edges = [low * (high / low) ** (i / n) for i in range(n + 1)]
+        idx = [i for i in range(n) if edges[i + 1] > lo_hz and edges[i] < hi_hz]
+        if not idx:   # range outside the bars: use the closest bar
+            mid = math.log(math.sqrt(lo_hz * hi_hz))
+            idx = [min(range(n), key=lambda i: abs(
+                math.log(math.sqrt(edges[i] * edges[i + 1])) - mid))]
+        return idx
 
     def update(self, active, color, bars):
         """Called every frame from the render loop."""
-        # energy from bass (lowest 1/8 of bars) and low-mids (up to half), so
-        # songs without a big kick still drive the lamp
-        n, h = max(1, len(bars) // 8), max(2, len(bars) // 2)
-        bass = sum(bars[:n]) / n / 1000
-        lowmid = sum(bars[n:h]) / (h - n) / 1000
-        bass = min(1.0, 0.5 * bass + 0.5 * lowmid)
+        if not bars:
+            return
+        st = settings.values("lamp")
+        now = time.monotonic()
+        dt, self._prev = now - self._prev, now
+        band = self._band(len(bars), st["low_hz"], st["high_hz"])
+        level = min(1.0, sum(bars[i] for i in band) / len(band) / 1000)
+        # hits: how far the band jumps above its own recent average. A kick is
+        # a sudden jump; a held bass note at the same frequencies is not.
+        hit = max(0.0, level - self._avg)
+        self._avg += (level - self._avg) * (1 - math.exp(-dt / HIT_AVERAGE_S))
+        energy = hit if st["mode"] == "hits" else level
         # silence is judged on every frequency, so quiet or bass-light
         # passages still count as music
-        sound = sum(bars) / max(1, len(bars)) / 1000
+        sound = sum(bars) / len(bars) / 1000
         with self._lock:
-            self._active, self._color, self._bass = active, lamp_color(color), bass
+            self._active, self._color = active, lamp_color(color)
+            # hold the peak: frames run at 60/s, the lamp at 20/s, and a kick
+            # spike can fall between lamp updates
+            self._energy = max(self._energy, energy)
             self._sound = sound
             if active:
-                self._last_active = time.monotonic()
+                self._last_active = now
 
     def start(self):
         self._loop = asyncio.new_event_loop()
@@ -148,9 +182,12 @@ class Lamp:
         except Exception:
             pass
 
-    def _snapshot(self):
+    def _snapshot(self, consume=False):
         with self._lock:
-            return self._active, self._color, self._bass, self._sound, self._last_active
+            snap = self._active, self._color, self._energy, self._sound, self._last_active
+            if consume:
+                self._energy = 0.0
+            return snap
 
     def _wanted(self):
         active, *_, last = self._snapshot()
@@ -185,15 +222,17 @@ class Lamp:
             now = time.monotonic()
             dt, prev = now - prev, now
             st = settings.values("lamp")
-            active, color, bass, sound, last_active = self._snapshot()
+            active, color, energy, sound, last_active = self._snapshot(consume=True)
             if active:
                 # scale to this song's recent peak so quieter mixes still use the
-                # full range; true silence stays dark
-                peak = max(bass, peak * math.exp(-dt / st["adapt_s"]), 0.15)
+                # full range; true silence stays dark. Hits are smaller numbers
+                # (a jump, not a level), hence the lower minimum.
+                min_peak = 0.05 if st["mode"] == "hits" else 0.15
+                peak = max(energy, peak * math.exp(-dt / st["adapt_s"]), min_peak)
                 if sound > SILENCE:
                     last_sound = now
                 gate = st["gate"] / 100
-                target = (max(0.0, bass / peak - gate) / (1 - gate)) ** st["curve"]
+                target = (max(0.0, energy / peak - gate) / (1 - gate)) ** st["curve"]
                 # ease towards the target: quick rise, slower fall, no hard jumps
                 level += (target - level) * ease(
                     st["rise_ms"] if target > level else st["settle_ms"], dt)

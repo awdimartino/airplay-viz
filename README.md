@@ -255,6 +255,8 @@ The settings page gets a **Lamp** section with its own presets:
 
 | Setting | What it does |
 |---|---|
+| React to | `level`: follows how loud the frequency range is. `hits`: follows sudden jumps in it, such as kick drums, and ignores held notes at the same frequencies. |
+| Lowest / Highest frequency | The frequency range the lamp listens to (default 50–700 Hz). It can't go below the screen's Lowest frequency, because it uses the same bars. |
 | Rise time / Settle time | How quickly it brightens on a beat, and how quickly it dims again |
 | Floor / Ceiling brightness | Brightness between beats while music plays, and on the strongest beats. Silence is always off. |
 | Beat threshold | How loud, relative to the song's recent peaks, music must be to rise above the floor |
@@ -263,6 +265,8 @@ The settings page gets a **Lamp** section with its own presets:
 | Silence hold | How long a silence must last before the lamp turns off |
 | When idle / Idle dim level | Nothing playing: off, or dim in the last album colour |
 | Colour saturation, R/G/B gamma, R/G/B gain | Colour correction so the LEDs match the screen (cheap LEDs wash colours out towards white/pink). The defaults are tuned by eye for one lamp. |
+
+**Just the kick drum:** React to `hits`, 40–120 Hz, Rise 0 ms, Settle 250 ms, Beat threshold 30%, Punch 1.5, Floor 5%. On 808-heavy tracks the bass shares the kick's frequencies; `hits` handles most but not all of that.
 
 The lamp needs a decent Bluetooth signal, about −80 dBm or stronger. Weaker than that, connections drop during setup.
 
