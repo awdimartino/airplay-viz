@@ -11,13 +11,12 @@ SupplementaryGroups=video render input
 Environment=SDL_VIDEODRIVER=kmsdrm PYGAME_HIDE_SUPPORT_PROMPT=1
 # Name shown on the idle screen (match shairport-sync's general.name)
 Environment="AIRPLAY_VIZ_NAME=Alex Pi"
+# Settings page port (http://<host>:8090/); 0 disables it
+#Environment=AIRPLAY_VIZ_PORT=8090
 # Optional music-reactive iStrip+ lamp (Bluetooth MAC); remove to disable.
-# AIRPLAY_VIZ_LAMP_IDLE: "dim" (stay on in album colour) or "off" after playback.
+# Its behaviour/colour settings are on the settings page.
 # AIRPLAY_VIZ_LAMP_RELEASE: seconds after playback to disconnect (0 = stay connected).
-Environment=AIRPLAY_VIZ_LAMP=B7:C2:85:5D:70:54 AIRPLAY_VIZ_LAMP_IDLE=off
-# Hold the screen bars back to match the audio (see shairport's
-# audio_backend_buffer_desired_length_in_seconds); the lamp gets the lead.
-Environment=AIRPLAY_VIZ_SCREEN_DELAY=0.15
+Environment=AIRPLAY_VIZ_LAMP=B7:C2:85:5D:70:54
 TTYPath=/dev/tty1
 TTYReset=yes
 TTYVHangup=yes
@@ -32,7 +31,8 @@ ExecStopPost=-+/bin/sh -c '[ -z "$AIRPLAY_VIZ_LAMP" ] || timeout 5 btmgmt discon
 ExecStart=/usr/bin/python3 -u /home/argyle/airplay-viz/airplay-viz.py
 Restart=always
 RestartSec=3
-# stop signal to python only, so it can switch the lamp off before cava goes
+# stop signal to python only, so it can switch the lamp off and shut cava down
+# itself
 KillMode=mixed
 
 [Install]
