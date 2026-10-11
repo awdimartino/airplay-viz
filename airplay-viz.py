@@ -630,6 +630,9 @@ def main():
 
             if asleep:
                 if now - last_playing > 1:   # still nothing playing
+                    if flags["shot"] and SCREEN_SLEEP != "off":
+                        flags["shot"] = False
+                        pygame.image.save(screen, SCREENSHOT)
                     time.sleep(0.25)
                     continue
                 if SCREEN_SLEEP == "off":       # music is back: wake up
