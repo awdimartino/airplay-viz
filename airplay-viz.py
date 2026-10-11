@@ -32,8 +32,11 @@ CACHE_DIR = os.path.expanduser("~/.cache/airplay-viz")
 STATE_FILE = os.path.join(CACHE_DIR, "state.json")
 ART_FILE = os.path.join(CACHE_DIR, "art")
 IDLE_NAME = os.environ.get("AIRPLAY_VIZ_NAME", "AirPlay")
-# Turn the screen off after this many seconds without music (0 = never)
+# Put the screen to sleep after this many seconds without music (0 = never)
 SCREEN_TIMEOUT = float(os.environ.get("AIRPLAY_VIZ_SCREEN_TIMEOUT", "300"))
+# How to sleep: "black" keeps the HDMI signal and shows pure black (for
+# screens whose "no signal" page is bright); "off" switches HDMI off.
+SCREEN_SLEEP = os.environ.get("AIRPLAY_VIZ_SCREEN_SLEEP", "black")
 BARS = 40
 FPS = 60
 RATE = 44100          # AirPlay RTP frames per second
@@ -629,13 +632,21 @@ def main():
                 if now - last_playing > 1:   # still nothing playing
                     time.sleep(0.25)
                     continue
-                console_blank(False)            # music is back: wake up
-                screen, viz = open_display()
+                if SCREEN_SLEEP == "off":       # music is back: wake up
+                    console_blank(False)
+                    screen, viz = open_display()
+                else:                           # fade in from the black frame
+                    viz.prev_layer = pygame.Surface(screen.get_size()).convert()
+                    viz.fade_t0 = now
                 asleep = False
             elif SCREEN_TIMEOUT and now - last_playing > SCREEN_TIMEOUT:
                 fade_out(screen)
-                pygame.display.quit()   # hand the display back to the console...
-                console_blank(True)     # ...which switches the HDMI signal off
+                if SCREEN_SLEEP == "off":
+                    pygame.display.quit()   # hand the display to the console...
+                    console_blank(True)     # ...which switches HDMI off
+                else:
+                    screen.fill((0, 0, 0))  # keep the signal, show pure black
+                    pygame.display.flip()
                 asleep = True
                 continue
 
