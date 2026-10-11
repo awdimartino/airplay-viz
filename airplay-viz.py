@@ -64,6 +64,7 @@ meta = {
     "changed": 0.0,   # time of last title/art change (debounced rebuild)
 }
 bars_latest = [0] * BARS
+shutting_down = threading.Event()
 
 
 def position(m):
@@ -229,7 +230,8 @@ def cava_reader(proc):
             continue
         if len(vals) >= BARS:
             bars_latest = vals[:BARS]
-    os._exit(1)   # cava died: let systemd restart us
+    if not shutting_down.is_set():
+        os._exit(1)   # cava died unexpectedly: let systemd restart us
 
 
 # --------------------------------------------------------------------------
@@ -539,6 +541,7 @@ def main():
                 pygame.image.save(screen, SCREENSHOT)
             clock.tick(FPS)
     finally:
+        shutting_down.set()
         if lamp:
             lamp.stop()
         cava.terminate()
