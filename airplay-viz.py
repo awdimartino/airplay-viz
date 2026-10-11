@@ -10,9 +10,9 @@ bars on the right, drawn full-screen on the HDMI display via SDL/KMSDRM.
 `kill -USR1 <pid>` saves the current frame to /tmp/airplay-viz.png.
 """
 import base64
-import colorsys
 import io
 import json
+import math
 import os
 import re
 import signal
@@ -237,28 +237,110 @@ def pil_to_surface(img):
     return pygame.image.frombytes(img.tobytes(), img.size, "RGBA").convert_alpha()
 
 
+def _to_oklab(rgb):
+    def lin(c):
+        c /= 255
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (lin(c) for c in rgb)
+    l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ** (1 / 3)
+    m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ** (1 / 3)
+    s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ** (1 / 3)
+    return (0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+            1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+            0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s)
+
+
+def _from_oklab(L, a, b):
+    """OKLab -> sRGB 0-255, or None if out of gamut."""
+    l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3
+    m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3
+    s = (L - 0.0894841775 * a - 1.2914855480 * b) ** 3
+    lin = (4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+           -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+           -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s)
+    if any(c < -1e-4 or c > 1 + 1e-4 for c in lin):
+        return None
+    out = []
+    for c in lin:
+        c = min(1.0, max(0.0, c))
+        c = 12.92 * c if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
+        out.append(round(c * 255))
+    return tuple(out)
+
+
 def accent_from(img):
-    """Most prominent vivid colour in the art, brightened for dark backgrounds."""
-    small = img.convert("RGB").resize((48, 48))
-    bins = {}
-    for r, g, b in small.getdata():
-        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
-        if s < 0.25 or v < 0.25:
+    """Pick the album's signature colour, the way music players do.
+
+    Quantize the cover to its main colours, measure them in OKLab (so
+    "colourful" and "bright" match perception), merge shades of the same hue,
+    and score each hue by how much of the cover it covers and how colourful it
+    is. Near-black/white/grey is ignored. The winner keeps its hue and is only
+    nudged in lightness/chroma to read well on the dark background.
+    """
+    small = img.convert("RGB")
+    small.thumbnail((96, 96))
+    quant = small.quantize(colors=32, method=Image.Quantize.FASTOCTREE)
+    pal = quant.getpalette()
+    counts = quant.getcolors() or []
+    total = sum(n for n, _ in counts) or 1
+
+    clusters = []   # (share, L, C, hue_deg): real colours, can be picked
+    tints = []      # faintly tinted areas (pale sky, sepia): only add weight
+    for n, idx in counts:
+        L, a, b = _to_oklab(pal[idx * 3: idx * 3 + 3])
+        C = math.hypot(a, b)
+        if L < 0.22 or L > 0.96 or C < 0.02:   # near-black, near-white, grey
             continue
-        w = s * v
-        acc = bins.setdefault(int(h * 24) % 24, [0.0, 0.0, 0.0, 0.0])
-        acc[0] += r * w
-        acc[1] += g * w
-        acc[2] += b * w
-        acc[3] += w
-    if not bins:
+        entry = (n / total, L, C, math.degrees(math.atan2(b, a)) % 360)
+        (clusters if C >= 0.05 else tints).append(entry)
+    if not clusters:
         return NEUTRAL
-    r, g, b, w = max(bins.values(), key=lambda a: a[3])
-    if w < 12:   # only a few colourful pixels: treat as monochrome art
+
+    def hue_gap(h1, h2):
+        d = abs(h1 - h2) % 360
+        return min(d, 360 - d)
+
+    # chain shades into hue families: walk round the hue circle and start a
+    # new family wherever there is a gap of more than LINK degrees, so a
+    # gradient like teal -> blue or orange -> brown stays one family
+    LINK = 20
+    by_hue = sorted(clusters, key=lambda c: c[3])
+    groups = [[[], 0.0]]     # [[clusters], tint_weight]
+    for prev, c in zip([None] + by_hue, by_hue):
+        if prev is not None and c[3] - prev[3] > LINK:
+            groups.append([[], 0.0])
+        groups[-1][0].append(c)
+    if len(groups) > 1 and hue_gap(by_hue[0][3], by_hue[-1][3]) <= LINK:
+        groups[0][0] += groups.pop()[0]   # family wrapping past 360 degrees
+    for t in tints:   # tinted areas back up the family they belong to
+        near = [(min(hue_gap(t[3], c[3]) for c in g[0]), g) for g in groups]
+        gap, g = min(near, key=lambda x: x[0])
+        if gap <= LINK:
+            g[1] += t[0] * t[2] / 0.05
+
+    def score(g):
+        share = sum(c[0] for c in g[0])
+        chroma = sum(c[0] * c[2] for c in g[0]) / share
+        return (share + g[1]) ** 0.75 * min(chroma / 0.2, 1.3) ** 0.6
+
+    # small accents only count when vivid (e.g. a coloured logo on dark art)
+    groups = [g for g in groups
+              if sum(c[0] for c in g[0]) >= (0.008 if max(c[2] for c in g[0]) > 0.12 else 0.03)]
+    if not groups:
         return NEUTRAL
-    h, s, v = colorsys.rgb_to_hsv(r / w / 255, g / w / 255, b / w / 255)
-    r, g, b = colorsys.hsv_to_rgb(h, min(max(s, 0.5), 0.85), 0.97)
-    return (int(r * 255), int(g * 255), int(b * 255))
+    best = max(groups, key=score)
+    _, L, C, hue = max(best[0], key=lambda c: c[0] * c[2])
+
+    # fit for a dark background without changing the hue
+    L = min(max(L, 0.72), 0.86)
+    C = min(max(C * 1.4, 0.13), 0.28)
+    h = math.radians(hue)
+    while C > 0:
+        rgb = _from_oklab(L, C * math.cos(h), C * math.sin(h))
+        if rgb:
+            return rgb
+        C -= 0.005
+    return NEUTRAL
 
 
 def rounded(img, size, radius):
