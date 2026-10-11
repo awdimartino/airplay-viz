@@ -11,8 +11,8 @@ SupplementaryGroups=video render input
 Environment=SDL_VIDEODRIVER=kmsdrm PYGAME_HIDE_SUPPORT_PROMPT=1
 # Name shown on the idle screen (match shairport-sync's general.name)
 Environment="AIRPLAY_VIZ_NAME=Alex Pi"
-# Settings page port (http://<host>:8090/); 0 disables it
-#Environment=AIRPLAY_VIZ_PORT=8090
+# Settings page port (http://<host>:8091/); 0 disables it
+#Environment=AIRPLAY_VIZ_PORT=8091
 # Optional music-reactive iStrip+ lamp (Bluetooth MAC); remove to disable.
 # Its behaviour/colour settings are on the settings page.
 # AIRPLAY_VIZ_LAMP_RELEASE: seconds after playback to disconnect (0 = stay connected).
