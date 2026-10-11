@@ -97,6 +97,24 @@ To get moving bars without a phone, stop shairport-sync and mute the DAC (`amixe
 - Text uses Inter, with DejaVu Sans as a fallback. Install a CJK font and add it as another fallback to display Chinese, Japanese or Korean titles.
 - The colour picker uses the cover's most prominent vivid colour. That isn't always the most eye-catching one.
 
+## Experimental: music-reactive iStrip+ lamp (`istrip-lamp` branch)
+
+This branch can also drive an iStrip+ Bluetooth LE lamp, such as the "SSL-xxxxxx" sunset lamps. The lamp takes the album's colour and its brightness pulses with the bass. The code is in `lamp.py`. It uses the protocol reverse-engineered in [this Habr article](https://habr.com/en/articles/722412): AES-128-ECB packets written to characteristic `ac52`.
+
+```sh
+sudo apt install python3-bleak python3-cryptography
+```
+
+Settings in the service file:
+
+| Variable | Meaning |
+|---|---|
+| `AIRPLAY_VIZ_LAMP` | The lamp's Bluetooth MAC address. Leave it unset to disable the lamp. |
+| `AIRPLAY_VIZ_LAMP_IDLE` | What the lamp does when nothing is playing: `dim` stays on at 30% in the album colour, `off` turns it off |
+| `AIRPLAY_VIZ_LAMP_RELEASE` | Seconds after playback ends before disconnecting, so the iStrip+ app can use the lamp. `0` keeps it connected permanently. |
+
+The lamp accepts only one Bluetooth connection at a time. It also needs a decent signal (about −80 dBm or stronger). Weaker than that, connections drop during setup.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

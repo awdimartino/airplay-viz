@@ -32,6 +32,9 @@ CACHE_DIR = os.path.expanduser("~/.cache/airplay-viz")
 STATE_FILE = os.path.join(CACHE_DIR, "state.json")
 ART_FILE = os.path.join(CACHE_DIR, "art")
 IDLE_NAME = os.environ.get("AIRPLAY_VIZ_NAME", "AirPlay")
+LAMP_ADDRESS = os.environ.get("AIRPLAY_VIZ_LAMP", "")          # iStrip+ lamp MAC; empty = off
+LAMP_IDLE = os.environ.get("AIRPLAY_VIZ_LAMP_IDLE", "dim")     # "dim" or "off" when playback ends
+LAMP_RELEASE = float(os.environ.get("AIRPLAY_VIZ_LAMP_RELEASE", "0"))  # 0 = stay connected
 BARS = 40
 FPS = 60
 RATE = 44100          # AirPlay RTP frames per second
@@ -499,6 +502,15 @@ def main():
     restore_state()
     last_save = time.monotonic()
 
+    lamp = None
+    if LAMP_ADDRESS:
+        try:
+            from lamp import Lamp
+            lamp = Lamp(LAMP_ADDRESS, LAMP_IDLE, LAMP_RELEASE)
+            lamp.start()
+        except ImportError as e:   # bleak / cryptography missing
+            print(f"lamp disabled: {e}", flush=True)
+
     flags = {"shot": False, "run": True}
     signal.signal(signal.SIGUSR1, lambda *_: flags.__setitem__("shot", True))
     signal.signal(signal.SIGTERM, lambda *_: flags.__setitem__("run", False))
@@ -519,6 +531,8 @@ def main():
                 save_state(m, with_art=False)
                 last_save = now
             viz.draw(m, bars_latest, now)
+            if lamp:
+                lamp.update(m["active"], viz.current_accent(now), bars_latest)
             pygame.display.flip()
             if flags["shot"]:
                 flags["shot"] = False
