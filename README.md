@@ -7,7 +7,7 @@ A now-playing screen for a Raspberry Pi AirPlay receiver. It shows the album art
 - Album art with title, artist, album and a progress bar
 - 40 equalizer bars, coloured to match each album cover
 - A blurred copy of the cover as the background, with a crossfade between tracks
-- An idle screen when nothing is playing
+- An idle screen when nothing is playing. After 5 minutes without music, the HDMI output switches off.
 - It draws straight to the screen through SDL's KMSDRM driver. On a Pi 5 it uses about 18% of one CPU core.
 
 ## How it works
@@ -73,6 +73,7 @@ sudo apt install shairport-sync cava python3-pygame python3-pil fonts-inter
 | What | Where |
 |---|---|
 | Idle-screen name | `AIRPLAY_VIZ_NAME` in the service file |
+| Screen sleep | `AIRPLAY_VIZ_SCREEN_TIMEOUT` in the service file: seconds with no music before the HDMI output switches off (default 300, `0` = never). The screen wakes when playback starts. |
 | Number of bars, frame rate | `BARS`, `FPS` in `airplay-viz.py` |
 | Bar smoothing / auto-sensitivity | `write_cava_conf()` in `airplay-viz.py` (`noise_reduction`, `autosens`) |
 | Background blur / brightness | `blurred_background()` |
