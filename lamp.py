@@ -21,8 +21,9 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 KEY = bytes.fromhex("34522A5B7A6E492C08090A9D8D2A23F8")
 CHAR = "0000ac52-1212-efde-1523-785fedbeda25"
 RATE = 20             # updates per second while playing
-GATE = 0.2            # fraction of the song's recent peak below which the lamp is dark
+GATE = 0.2            # fraction of the song's recent peak below which the lamp sits at FLOOR
 CURVE = 1.5           # >1 = more contrast between quiet and loud
+FLOOR = 0.10          # brightness while music plays (0-1); silence is off
 SILENCE = 0.03        # absolute energy (0-1) treated as silence
 PEAK_DECAY = 0.995    # per update; recent-peak memory of roughly 7 s at 20 Hz
 
@@ -118,7 +119,10 @@ class Lamp:
                 target = (max(0.0, rel - GATE) / (1 - GATE)) ** CURVE
                 # fast attack, smoother decay
                 level = target if target > level else level * 0.8 + target * 0.2
-                bright = round(level * 100)
+                if bass > SILENCE:
+                    bright = round((FLOOR + (1 - FLOOR) * level) * 100)
+                else:
+                    bright = round(level * 100)    # fade out into silence
                 state = (*color, bright) if bright >= 2 else (0, 0, 0, 0)
             else:
                 state = (*color, 30) if self.idle == "dim" else (0, 0, 0, 0)
