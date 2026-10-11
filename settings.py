@@ -152,6 +152,23 @@ def delete_preset(section, name):
     _write(PRESETS_FILE, presets)
 
 
+def bar_range():
+    """(low_hz, high_hz) actually given to cava for the screen bars: the high
+    end is kept at least an octave above the low end and below Nyquist."""
+    s = values("screen")
+    low = int(s["low_hz"])
+    high = int(min(max(s["high_hz"], low * 2), 20000))
+    return low, high
+
+
+def bar_edges():
+    """Frequency edges of the cava bars: bar i covers edges[i]..edges[i+1].
+    cava spaces them logarithmically between the cut-offs."""
+    n = int(values("screen")["bars"])
+    low, high = bar_range()
+    return [low * (high / low) ** (i / n) for i in range(n + 1)]
+
+
 def _save_values():
     _write(SETTINGS_FILE, _values)
 
