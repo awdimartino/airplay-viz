@@ -8,7 +8,7 @@ bars on the right, drawn full-screen on the HDMI display via SDL/KMSDRM.
 - Bar colour: picked from the album art for each track.
 
 Settings (bar response, sleep, ...) are adjustable live from a small web page,
-http://<host>:8090/ (see settings.py and webui.py).
+http://<host>:8091/ (see settings.py and webui.py).
 
 `kill -USR1 <pid>` saves the current frame to /tmp/airplay-viz.png.
 """
@@ -40,7 +40,7 @@ CACHE_DIR = os.path.expanduser("~/.cache/airplay-viz")
 STATE_FILE = os.path.join(CACHE_DIR, "state.json")
 ART_FILE = os.path.join(CACHE_DIR, "art")
 IDLE_NAME = os.environ.get("AIRPLAY_VIZ_NAME", "AirPlay")
-WEB_PORT = int(os.environ.get("AIRPLAY_VIZ_PORT", "8090"))   # settings page; 0 = off
+WEB_PORT = int(os.environ.get("AIRPLAY_VIZ_PORT", "8091"))   # settings page; 0 = off
 RATE = 44100          # AirPlay RTP frames per second
 
 # Live-adjustable from the settings page (see settings.py / webui.py)
