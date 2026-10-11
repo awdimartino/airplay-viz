@@ -146,6 +146,7 @@ journalctl -u airplay-viz -n 20                     # should end with "settings 
 | Sensitivity | 0 = automatic (loud passages fill the bar area); otherwise a fixed level, lower for more headroom |
 | Bar height | Tallest a bar can grow, as % of the bar area |
 | Number of bars, Frame rate | Layout and smoothness of the bars |
+| Lowest / Highest frequency | The frequency range the bars cover (default 50 Hz to 10 kHz, spaced logarithmically like musical pitch). Kick drums sit around 50–100 Hz, bass lines 60–250 Hz, vocals 200 Hz–3 kHz, hi-hats and cymbals 5 kHz and up. |
 | Bar delay | Holds the bars back to line up with what you hear |
 | Sleep after | Minutes without music (stopped or paused) before the screen sleeps; 0 = never |
 | Sleep mode | `black` keeps the HDMI signal and shows pure black (for screens whose "no signal" page is bright); `off` switches the HDMI output off |

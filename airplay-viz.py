@@ -58,6 +58,12 @@ settings.register("screen", "Visualizer", [
             hint="Tallest a bar can grow, as a share of the bar area."),
     Setting("bars", "Number of bars", 40, min=8, max=80, step=1, restart="cava",
             hint="How many bars to draw."),
+    Setting("low_hz", "Lowest frequency", 50, min=20, max=2000, step=5, unit="Hz", restart="cava",
+            hint="Frequency of the leftmost bar. Kick drums sit around 50-100 Hz."),
+    Setting("high_hz", "Highest frequency", 10000, min=200, max=20000, step=50, unit="Hz",
+            restart="cava",
+            hint="Frequency of the rightmost bar (kept at least an octave above the lowest). "
+                 "Cymbals and hi-hats reach 10 kHz and beyond."),
     Setting("fps", "Frame rate", 60, min=20, max=60, step=1, unit="fps", restart="cava",
             hint="Bar updates per second. Lower uses less CPU."),
     Setting("delay_ms", "Bar delay", 0, min=0, max=1000, step=10, unit="ms",
@@ -228,6 +234,7 @@ def restore_state():
 def write_cava_conf():
     s = settings.values("screen")
     sens = s["sensitivity"]
+    low, high = settings.bar_range()
     os.makedirs(os.path.dirname(CAVA_CONF), exist_ok=True)
     with open(CAVA_CONF, "w") as f:
         f.write(f"""[general]
@@ -235,6 +242,8 @@ framerate = {s["fps"]}
 autosens = {0 if sens else 1}
 {f"sensitivity = {sens}" if sens else ""}
 bars = {s["bars"]}
+lower_cutoff_freq = {low}
+higher_cutoff_freq = {high}
 
 [input]
 method = alsa
@@ -690,7 +699,7 @@ def console_blank(blank):
         print(f"console blank failed: {e}", flush=True)
 
 
-CAVA_KEYS = {"smoothing", "sensitivity", "bars", "fps"}   # need a cava restart
+CAVA_KEYS = {"smoothing", "sensitivity", "bars", "fps", "low_hz", "high_hz"}   # need a cava restart
 
 
 def main():
