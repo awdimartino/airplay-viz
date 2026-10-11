@@ -12,6 +12,7 @@ it permanently; set release > 0 to disconnect that many seconds after playback
 ends so the iStrip+ app can use the lamp in between.
 """
 import asyncio
+import colorsys
 import threading
 import time
 
@@ -26,6 +27,29 @@ CURVE = 1.5           # >1 = more contrast between quiet and loud
 FLOOR = 0.10          # brightness while music plays (0-1); silence is off
 SILENCE = 0.03        # absolute energy (0-1) treated as silence
 PEAK_DECAY = 0.995    # per update; recent-peak memory of roughly 7 s at 20 Hz
+
+
+GAMMA = (1.5, 2.4, 2.4)   # per R,G,B: LED channels are linear; screens are not
+GAIN = (1.0, 1.0, 0.82)   # per R,G,B white balance: this lamp's blue LED is strong
+SATURATE = 1.4        # >1 strips more of the "white" (smallest channel)
+
+
+def lamp_color(rgb):
+    """Map a screen colour to what looks like the same colour on the lamp.
+
+    Cheap RGB LEDs drive each channel linearly, so mid values (e.g. the green
+    in orange) look nearly full and colours wash out towards white/pink.
+    Boost saturation, apply gamma, then normalise so the brightest channel is
+    255 (overall brightness is set separately by the brightness byte).
+    """
+    r, g, b = (c / 255 for c in rgb)
+    h, s, v = colorsys.rgb_to_hsv(r, g, b)
+    if s < 0.08:                         # neutral/grey art: plain white
+        return (255, 255, 255)
+    r, g, b = colorsys.hsv_to_rgb(h, min(1.0, s * SATURATE), 1.0)
+    r, g, b = (c ** gm * gn for c, gm, gn in zip((r, g, b), GAMMA, GAIN))
+    m = max(r, g, b)
+    return tuple(round(255 * c / m) for c in (r, g, b))
 
 
 def packet(r, g, b, brightness):
@@ -55,7 +79,7 @@ class Lamp:
         lowmid = sum(bars[n:h]) / (h - n) / 1000
         bass = min(1.0, 0.5 * bass + 0.5 * lowmid)
         with self._lock:
-            self._active, self._color, self._bass = active, tuple(color), bass
+            self._active, self._color, self._bass = active, lamp_color(color), bass
             if active:
                 self._last_active = time.monotonic()
 
