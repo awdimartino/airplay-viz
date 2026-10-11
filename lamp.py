@@ -15,13 +15,14 @@ import asyncio
 import threading
 import time
 
-from bleak import BleakClient, BleakScanner
+from bleak import BleakClient
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 KEY = bytes.fromhex("34522A5B7A6E492C08090A9D8D2A23F8")
 CHAR = "0000ac52-1212-efde-1523-785fedbeda25"
 RATE = 20             # updates per second while playing
-FLOOR = 0.15          # brightness between beats (0-1)
+GATE = 0.15           # bass level (0-1) below which the lamp is dark
+CURVE = 1.8           # >1 = more contrast between quiet and loud
 
 
 def packet(r, g, b, brightness):
@@ -32,9 +33,9 @@ def packet(r, g, b, brightness):
 
 
 class Lamp:
-    def __init__(self, address, idle="dim", release=0):
+    def __init__(self, address, idle="off", release=0):
         self.address = address
-        self.idle = idle          # "dim": stay on in the album colour, "off"
+        self.idle = idle          # "off", or "dim": stay on at 30% in the album colour
         self.release = release    # seconds idle before disconnecting; 0 = stay connected
         self._lock = threading.Lock()
         self._active = False
@@ -52,7 +53,25 @@ class Lamp:
                 self._last_active = time.monotonic()
 
     def start(self):
-        threading.Thread(target=lambda: asyncio.run(self._run()), daemon=True).start()
+        self._loop = asyncio.new_event_loop()
+        self._client = None
+        threading.Thread(target=self._loop.run_until_complete, args=(self._run(),),
+                         daemon=True).start()
+
+    def stop(self, timeout=3):
+        """Turn the lamp off and disconnect (call on shutdown), so the next
+        start can find it again instead of BlueZ holding a stale link."""
+        async def _off():
+            c = self._client
+            if c is not None and c.is_connected:
+                try:
+                    await c.write_gatt_char(CHAR, packet(0, 0, 0, 0), response=False)
+                finally:
+                    await c.disconnect()
+        try:
+            asyncio.run_coroutine_threadsafe(_off(), self._loop).result(timeout)
+        except Exception:
+            pass
 
     def _snapshot(self):
         with self._lock:
@@ -68,14 +87,13 @@ class Lamp:
                 await asyncio.sleep(1)
                 continue
             try:
-                dev = await BleakScanner.find_device_by_address(self.address, timeout=15)
-                if dev is None:
-                    print(f"lamp: {self.address} not found", flush=True)
-                    await asyncio.sleep(10)
-                    continue
-                async with BleakClient(dev, timeout=20) as client:
+                # by address rather than scan: also picks up a link BlueZ
+                # still holds (a connected lamp stops advertising)
+                async with BleakClient(self.address, timeout=20) as client:
+                    self._client = client
                     print("lamp: connected", flush=True)
                     await self._drive(client)
+                self._client = None
                 print("lamp: disconnected", flush=True)
             except Exception as e:   # BLE errors: lamp off, out of range, busy
                 print(f"lamp: {e!r}", flush=True)
@@ -87,10 +105,11 @@ class Lamp:
             now = time.monotonic()
             active, color, bass, last_active = self._snapshot()
             if active:
-                target = FLOOR + (1 - FLOOR) * bass ** 1.3
+                target = (max(0.0, bass - GATE) / (1 - GATE)) ** CURVE
                 # fast attack, smoother decay
                 level = target if target > level else level * 0.8 + target * 0.2
-                state = (*color, round(level * 100))
+                bright = round(level * 100)
+                state = (*color, bright) if bright >= 2 else (0, 0, 0, 0)
             else:
                 state = (*color, 30) if self.idle == "dim" else (0, 0, 0, 0)
                 if self.release and now - last_active >= self.release:

@@ -33,7 +33,7 @@ STATE_FILE = os.path.join(CACHE_DIR, "state.json")
 ART_FILE = os.path.join(CACHE_DIR, "art")
 IDLE_NAME = os.environ.get("AIRPLAY_VIZ_NAME", "AirPlay")
 LAMP_ADDRESS = os.environ.get("AIRPLAY_VIZ_LAMP", "")          # iStrip+ lamp MAC; empty = off
-LAMP_IDLE = os.environ.get("AIRPLAY_VIZ_LAMP_IDLE", "dim")     # "dim" or "off" when playback ends
+LAMP_IDLE = os.environ.get("AIRPLAY_VIZ_LAMP_IDLE", "off")     # "off" or "dim" when nothing is playing
 LAMP_RELEASE = float(os.environ.get("AIRPLAY_VIZ_LAMP_RELEASE", "0"))  # 0 = stay connected
 BARS = 40
 FPS = 60
@@ -539,6 +539,8 @@ def main():
                 pygame.image.save(screen, SCREENSHOT)
             clock.tick(FPS)
     finally:
+        if lamp:
+            lamp.stop()
         cava.terminate()
         pygame.quit()
 
